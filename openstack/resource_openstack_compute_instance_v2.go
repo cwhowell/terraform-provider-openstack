@@ -215,10 +215,25 @@ func resourceComputeInstanceV2() *schema.Resource {
 				ForceNew: true,
 			},
 			"admin_pass": {
-				Type:      schema.TypeString,
-				Optional:  true,
-				Sensitive: true,
-				ForceNew:  false,
+				Type:          schema.TypeString,
+				Optional:      true,
+				Sensitive:     true,
+				ForceNew:      false,
+				ConflictsWith: []string{"admin_pass_wo", "admin_pass_wo_version"},
+			},
+			"admin_pass_wo": {
+				Type:          schema.TypeString,
+				Optional:      true,
+				Sensitive:     true,
+				WriteOnly:     true,
+				ForceNew:      false,
+				ConflictsWith: []string{"admin_pass"},
+			},
+			"admin_pass_wo_version": {
+				Type:          schema.TypeString,
+				Optional:      true,
+				ForceNew:      false,
+				ConflictsWith: []string{"admin_pass"},
 			},
 			"access_ip_v4": {
 				Type:     schema.TypeString,
@@ -556,6 +571,20 @@ func resourceComputeInstanceV2Create(ctx context.Context, d *schema.ResourceData
 		userData = []byte(d.Get("user_data").(string))
 	}
 
+	woAdminPass, diags := d.GetRawConfigAt(cty.GetAttrPath("admin_pass_wo"))
+	if diags != nil {
+		return diags
+	}
+	if !woAdminPass.Type().Equals(cty.String) {
+		return diag.Errorf("expected a string for admin_pass_wo")
+	}
+	var adminPass string
+	if !woAdminPass.IsNull() {
+		adminPass = woAdminPass.AsString()
+	} else {
+		adminPass = d.Get("admin_pass").(string)
+	}
+
 	createOpts := &servers.CreateOpts{
 		Name:               d.Get("name").(string),
 		ImageRef:           imageID,
@@ -566,7 +595,7 @@ func resourceComputeInstanceV2Create(ctx context.Context, d *schema.ResourceData
 		HypervisorHostname: hypervisorHostname,
 		Metadata:           resourceInstanceMetadataV2(d),
 		ConfigDrive:        &configDrive,
-		AdminPass:          d.Get("admin_pass").(string),
+		AdminPass:          adminPass,
 		UserData:           userData,
 		Personality:        resourceInstancePersonalityV2(d),
 		Tags:               instanceTags,
@@ -1032,6 +1061,21 @@ func resourceComputeInstanceV2Update(ctx context.Context, d *schema.ResourceData
 			if err != nil {
 				return diag.Errorf("Error changing admin password of OpenStack server (%s): %s", d.Id(), err)
 			}
+		}
+	}
+
+	if d.HasChange("admin_pass_wo_version") {
+		woAdminPass, diags := d.GetRawConfigAt(cty.GetAttrPath("admin_pass_wo"))
+		if diags != nil {
+			return diags
+		}
+		if !woAdminPass.Type().Equals(cty.String) {
+			return diag.Errorf("expected a string for admin_pass_wo")
+		}
+		newPwd := woAdminPass.AsString()
+		err := servers.ChangeAdminPassword(ctx, computeClient, d.Id(), newPwd).ExtractErr()
+		if err != nil {
+			return diag.Errorf("Error changing admin password of OpenStack server (%s): %s", d.Id(), err)
 		}
 	}
 
